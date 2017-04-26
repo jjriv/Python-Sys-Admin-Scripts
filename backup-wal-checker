@@ -1,0 +1,24 @@
+#!/usr/bin/python
+from datetime import datetime, timedelta
+import smtplib
+
+#startdate = datetime.today() - timedelta(daysback);
+
+plog = '/var/lib/pgsql/9.3/data/pg_log/postgresql-%s.log'
+walmsg = ''
+
+#loop through last few days to be sure
+for x in range(0,2):
+    pdate = (datetime.today() - timedelta(x)).date()
+    for line in open(plog % pdate):
+        if 'ERROR:  requested WAL segment' in line:
+            walmsg += line
+#if we found a failure, report it
+if walmsg:
+    headers = 'From: backup@pelagodesign.com\r\n'
+    headers += 'To: backup@pelagodesign.com\r\n'
+    headers += 'Subject: R2DA backup failed\r\n'
+    headers += '\r\n'
+    server = smtplib.SMTP('mx.myintervals.com')
+    server.sendmail('backup@pelagodesign.com','backup@pelagodesign.com', headers + walmsg)
+    server.quit()
