@@ -1,0 +1,65 @@
+#!/usr/bin/python
+import datetime
+import sys
+
+if len(sys.argv) == 1:
+    isodate = datetime.date.today()
+else:
+    isodate = sys.argv[1]
+
+usage = {}
+logs = {}
+statements = {}
+details = {}
+numwrites = {}
+eachusage = {}
+pid = 0
+totalmem = 0
+nummem = 0
+plog = '/var/lib/pgsql/9.3/data/pg_log/postgresql-%s.log'
+loop = 0
+
+for line in open(plog % isodate):
+    if 'LOG:  temporary file' in line:
+        #pull the info we need from the line
+        parts = line.strip().split(" ")
+        pid = parts[3].strip('[]:')
+        size = parts[12]
+        #build the dict
+        if(pid not in usage):
+            usage[pid] = 0
+        if(pid not in numwrites):
+            numwrites[pid] = 0
+        if(pid not in eachusage):
+            eachusage[pid] = ''
+        usage[pid] += int(size)
+        eachusage[pid] += str(round(float(size)/1000000,2)) + '|'
+        numwrites[pid] += 1
+        totalmem += int(size)
+        nummem += 1
+        loop = 1
+    elif loop == 1 and pid > 0 and pid and 'STATEMENT:' in line:
+        statements[pid] = line
+        loop = 2
+    elif loop == 2 and pid > 0 and pid and 'LOG:  duration' in line:
+        logs[pid] = line
+        loop = 3
+    elif loop == 3 and pid > 0 and pid and 'DETAIL:' in line:
+            details[pid] = line
+        loop = 0
+    else:
+        pid = 0
+        loop = 0
+
+print "PID,Total MB,Avg MB,Num Ops,Each Op,Statement,Log,Detail"
+lineout = ''
+for pid, size in usage.iteritems():
+    lineout = pid + ','
+    lineout += str(round(float(size)/1000000,2)) + ','
+    lineout += str(round(float(size)/numwrites[pid]/1000000,2)) + ','
+    lineout += str(numwrites[pid]) + ','
+    lineout += '"' + eachusage[pid] + '",'
+    lineout += '"' + statements[pid].strip() + '",'
+    lineout += '"' + logs[pid].strip() + '",'
+    lineout += '"' + details[pid].strip() + '",'
+    print lineout
