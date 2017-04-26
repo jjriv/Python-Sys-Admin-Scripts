@@ -1,0 +1,19 @@
+#!/usr/bin/python
+import datetime
+today = datetime.date.today()
+threshold = 60000
+#today = '2017-03-20'
+
+plog = '/var/lib/pgsql/9.3/data/pg_log/postgresql-' + str(today) + '.log'
+
+for line in open(plog):
+    if 'LOG:  duration' in line:
+        bits = line.split(" ")
+        if len(bits) >= 8:
+            try:
+                dur = float(bits[8])
+            except:
+                print line
+                continue
+            if dur > threshold:
+                print line
