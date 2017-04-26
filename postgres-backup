@@ -1,0 +1,23 @@
+#!/usr/bin/python
+
+import time
+import os
+import socket
+import sys
+
+#dir where we will put hte bakcup
+td = '/var/lib/pgsql/backup'
+
+#create timestamp file
+fp = open('/rsync/timestamp.txt', 'w')
+fp.write('%s' % int(time.time()))
+fp.close()
+
+#do the base backup
+os.system("su - postgres -c '/bin/nice -n +15 pg_basebackup -d postgresql://username:password@localhost -D %s -Ft -Xf -z'" % td)
+
+#move it all over to the /rsync folder
+os.system("/bin/nice -n +15 mv %s/* /rsync/." % td)
+os.system("chmod 600 /rsync/*")
+os.system("chown rsync:rsync /rsync/*")
+os.system('chmod -R u+rwX,go-rwx %s' % td)
