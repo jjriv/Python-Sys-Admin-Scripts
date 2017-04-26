@@ -15,10 +15,10 @@ for x in range(0,2):
             walmsg += line
 #if we found a failure, report it
 if walmsg:
-    headers = 'From: backup@pelagodesign.com\r\n'
-    headers += 'To: backup@pelagodesign.com\r\n'
+    headers = 'From: xxxxxxxx@pelagodesign.com\r\n'
+    headers += 'To: xxxxxxxx@pelagodesign.com\r\n'
     headers += 'Subject: R2DA backup failed\r\n'
     headers += '\r\n'
     server = smtplib.SMTP('mx.myintervals.com')
-    server.sendmail('backup@pelagodesign.com','backup@pelagodesign.com', headers + walmsg)
+    server.sendmail('xxxxxxx@pelagodesign.com','xxxxxxx@pelagodesign.com', headers + walmsg)
     server.quit()
