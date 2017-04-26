@@ -1,0 +1,27 @@
+
+#!/usr/bin/python
+
+import subprocess
+import urllib2
+import time
+import tarfile
+
+#define cores in an array
+cores = ['client', 'document', 'milestone', 'person', 'project', 'project_invoice', 'project_note', 'task']
+
+#loop through cores, delete old backup, create new backup
+for core in cores:
+        #delete old backup
+        c = "rm -rf /etc/solr/backups/%s/snapshot.*" % core
+        subprocess.call(c, shell=True)
+        #create the new backup with an api request
+        u = "http://localhost:8983/solr/%s/replication?command=backup&location=/etc/solr/backups/%s/" % (core, core)
+        urllib2.urlopen(u)
+
+#sleep for a lil bit to give the above a chance to write to disk
+time.sleep(60)
+
+#now tar up the results
+t = tarfile.open('/rsync/solr.tar.gz','w:gz')
+t.add('/etc/solr/backups')
+t.close()
