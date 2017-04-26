@@ -1,0 +1,33 @@
+#!/usr/bin/python
+
+import time
+import os
+import socket
+import sys
+
+t = time.strftime('%Y%m%d')
+#me = socket.gethostname().split('.')[0]
+td = '/var/tmp/.backup'
+
+try:
+    os.stat(td)
+    os.system('rm -rf %s' % td)
+except OSError, e:
+    pass
+os.mkdir(td, 0777)
+os.chdir(td)
+
+os.system('/bin/nice -n +15 mysqldump -A -u root -p\password > mysql.sql')
+os.system('/bin/nice -n +15 mysqldump -u root -p\password intervals101 > mysql_intervals101.sql')
+
+os.system("/bin/nice -n +15 gzip %s/mysql_intervals101.sql" % td)
+os.system("/bin/nice -n +15 gzip %s/mysql.sql" % td)
+os.system("/bin/nice -n +15 mv %s/mysql_intervals101.sql.gz /rsync/." % td)
+os.system("/bin/nice -n +15 mv %s/mysql.sql.gz /rsync/." % td)
+#os.system("/bin/nice -n +15 mv %s/pgsql.sqlc /rsync/." % td)
+os.system("chmod 600 /rsync/*")
+os.system("chown rsync:rsync /rsync/*")
+os.system('chmod -R u+rwX,go-rwx %s' % td)
+
+os.system("/usr/bin/rsync -az -e 'ssh -i /root/.ssh/d2da-key'  /rsync/mysql_intervals101.sql.gz rsync@m1ch.pelagodesign.com:/rsync/");
+
