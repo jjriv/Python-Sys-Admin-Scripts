@@ -1,0 +1,61 @@
+#!/usr/bin/python
+import subprocess
+import sys
+import time
+import smtplib
+
+#we are basing the week number off the epoch to avoid overlapping weeks on the new year
+week = str(int(time.time() / (3600*24*7)) % 4)
+
+uuids = []
+labels = []
+errors = []
+successes = []
+#first get all the uuids
+procuuid = subprocess.Popen(['xe', 'vm-list', 'is-control-domain=false'],stdout=subprocess.PIPE)
+for line in procuuid.stdout:
+    if 'uuid' in line:
+        uuids.append(line.split(':').pop().strip())
+    if 'name-label' in line:
+        labels.append(line.split(':').pop().strip())
+
+#now backup each uuid
+for i, uuid in enumerate(uuids):
+    #uncomment and modify to backup a single vm
+    #if not 'u1sb' in labels[i]:
+    #    break
+    #else:
+    #    print labels[i]
+    #create snapshot
+    procsnapshot = subprocess.Popen(['xe', 'vm-snapshot', 'uuid=' + uuids[i], 'new-name-label=backup-' + labels[i]],stdout=subprocess.PIPE)
+    suuid = procsnapshot.stdout.readline().strip()
+    #create template
+    proctemplate = subprocess.Popen(['xe', 'template-param-set', 'is-a-template=false', 'ha-always-run=false', 'uuid='+suuid])
+    #remove previous xva file
+    removexva = subprocess.Popen(['rm','-rf','/media/backup/'+week+'/'+labels[i]+'.xva'])
+    #export template
+    procexporttemplate = subprocess.Popen(['xe', 'vm-export', 'vm='+suuid, 'filename=/media/backup/'+week+'/'+labels[i]+'.xva'],stdout=subprocess.PIPE)
+    result = procexporttemplate.stdout.readline().strip()
+    #make sure it says 'Export succeeded'
+    if not 'Export succeeded' in result:
+        errors.append(uuids[i] + ': ' + labels[i])
+    else:
+        successes.append(uuids[i] + ': ' + labels[i])
+    #delete the snapshot
+    procdelsnapshot = subprocess.Popen(['xe', 'vm-uninstall', 'uuid='+suuid, 'force=true'])
+
+#send an email with details of backup
+msg = "From: backup@pelagodesign.com\r\n"
+msg = msg + "To: backup@pelagodesign.com\r\n"
+msg = msg + "Subject: VM Backup Results\r\n"
+msg = msg + "\r\n"
+msg = msg + "Backed up the following VMs:\n"
+msg = msg + "\n".join(successes)+"\n"
+if len(errors):
+    msg = msg + "ERROR: The following VMs did not get backed up:\n"
+    msg = msg + "\n".join(errors)+"\n"
+
+server = smtplib.SMTP('192.168.1.42')
+server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+server.quit()
+
