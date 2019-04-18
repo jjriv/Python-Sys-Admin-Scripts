@@ -1,0 +1,163 @@
+#!/usr/bin/python3
+
+import lxc
+import os
+import sys
+import time
+import datetime
+import smtplib
+
+#create the container object
+c = lxc.Container("postgresql", "/home/lxc")
+backupdir = "/nas/servers/db.pelagodesign.com"
+mediadir = "/media/postgresql-backup"
+mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
+statusfile = "postgresql-status"
+datefile = "postgresql-date"
+consistentcheck = "consistent recovery state reached"
+readycheck = "database system is ready to accept connections"
+today = datetime.date.today()
+yesterday = datetime.date.today() - datetime.timedelta(1)
+
+#create the container, but only if it does not already exist
+if not c.defined and not c.running:
+    if not c.create(
+        "download",
+        lxc.LXC_CREATE_QUIET,
+        {"dist": "centos", "release": "7", "arch": "amd64"}):
+            print("Failed to create the container rootfs", file=sys.stderr)
+            sys.exit(1)
+
+#append the mount point
+if not mountentry in c.get_config_item("lxc.mount.entry"):
+    c.append_config_item("lxc.mount.entry", mountentry)
+
+#start the container if it is not already running
+if not c.running:
+    if not c.start():
+        print("Failed to start the container", file=sys.stderr)
+        sys.exit(1)
+
+#wait for connectivity
+#this is not enough time, need to loop through it a few times until container network is ready
+while not c.get_ips(timeout=1):
+    print('Waiting for network...')
+
+#sleep for a little longer just to be sure
+print('Network found, pausing a moment to let it finish starting...')
+time.sleep(5)
+
+#run some network commands to install postgres and update all the things
+c.attach_wait(lxc.attach_run_command,
+    ["yum", "install", "https://download.postgresql.org/pub/repos/yum/10/redhat/rhel-7-x86_64/pgdg-centos10-10-2.noarch.rpm", "-y"])
+c.attach_wait(lxc.attach_run_command,
+    ["yum", "install", "postgresql10-server", "-y"])
+c.attach_wait(lxc.attach_run_command,
+    ["yum", "install", "postgresql10-contrib", "-y"])
+c.attach_wait(lxc.attach_run_command,
+    ["yum", "update", "-y"])
+
+#uncompress data files into postgres data directory
+c.attach_wait(lxc.attach_run_command,
+    ["mkdir", "/var/lib/pgsql/10/wal_archive"])
+c.attach_wait(lxc.attach_run_command,
+    ["chmod", "0700", "/var/lib/pgsql/10/wal_archive"])
+c.attach_wait(lxc.attach_run_command,
+    ["tar", "-xzvf", mediadir + "/base.tar.gz", "-C", "/var/lib/pgsql/10/data"])
+c.attach_wait(lxc.attach_run_command,
+    ["tar", "-xzvf", mediadir + "/pg_wal.tar.gz", "-C", "/var/lib/pgsql/10/wal_archive"])
+c.attach_wait(lxc.attach_run_command,
+    ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/10/wal_archive"])
+c.attach_wait(lxc.attach_run_command,
+    ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/10/data"])
+
+#modify postgresql.conf
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/shared_buffers/#shared_buffers/g", "/var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/effective_cache_size/#effective_cache_size/g", "/var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/archive_mode/#archive_mode/g", "/var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/maintenance_work_mem/#maintenance_work_mem/g", "/var/lib/pgsql/10/data/postgresql.conf"])
+#second, add numbers better for this server
+c.attach_wait(lxc.attach_run_command,
+    ["sh", "-c", "echo 'shared_buffers = 2GB' >> /var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sh", "-c", "echo 'effective_cache_size = 4GB' >> /var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sh", "-c", "echo 'archive_mode = off' >> /var/lib/pgsql/10/data/postgresql.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> /var/lib/pgsql/10/data/postgresql.conf"])
+    
+#start postgresql
+c.attach_wait(lxc.attach_run_command,
+    ["systemctl", "start", "postgresql-10"])
+
+#wait for archives to catch up
+#create status file in shared dir
+c.attach_wait(lxc.attach_run_command,
+    ["touch", mediadir + "/" + statusfile])
+
+#check that recovery has completed
+while len(open(backupdir + "/" + statusfile).readlines()) == 0:
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "grep '" + consistentcheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log > " + mediadir + "/" + statusfile])
+    print('Waiting for recovery to complete...')
+    time.sleep(1)
+
+#check that database is ready to accept connections
+while len(open(backupdir + "/" + statusfile).readlines()) == 1:
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "grep '" + readycheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log >> " + mediadir + "/" + statusfile])
+    print('Waiting for database to accept connections...')
+    time.sleep(1)
+
+#create date file in shared dir and set perms
+c.attach_wait(lxc.attach_run_command,
+    ["touch", mediadir + "/" + datefile])
+c.attach_wait(lxc.attach_run_command,
+    ["chgrp", "postgres", mediadir + "/" + datefile])
+c.attach_wait(lxc.attach_run_command,
+    ["chmod", "g+w", mediadir + "/" + datefile])
+
+#run a query against the database to make sure we have recent data, write to date file
+c.attach_wait(lxc.attach_run_command,
+    ["runuser", "-l", "postgres", "-c", "psql intervalsdev -t -c 'SELECT date FROM time ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
+
+#read the date file
+with open(backupdir + "/" + datefile, 'r') as datefile:
+    backupdate = datefile.read().strip()
+
+#read the status file
+with open(backupdir + "/" + statusfile, 'r') as statusfile:
+    backupstatus = statusfile.read()
+
+#if yesterday's date is not present in the date file, alert the authorities!
+if backupdate != yesterday:
+    msg = "From: backup@pelagodesign.com\r\n"
+    msg = msg + "To: jreeve@pelagodesign.com\r\n"
+    msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+    msg = msg + "\r\n"
+    msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
+    msg = msg + "\nDate found: "+backupdate+"\n"
+    msg = msg + "Logs:\n"+backupstatus
+    server = smtplib.SMTP('192.168.1.42')
+    server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+    server.quit()
+
+#stop and destroy container
+if not c.stop():
+    print("Failed to stop the container", file=sys.stderr)
+    sys.exit(1)
+if not c.destroy():
+    print("Failed to destroy the container", file=sys.stderr)
+    sys.exit(1)
+
+#delete unencrypted files
+os.remove(backupdir + "/base.tar.gz")
+os.remove(backupdir + "/pg_wal.tar.gz")
+
+#delete status and date text files
+os.remove(backupdir + "/" + statusfile)
+os.remove(backupdir + "/" + datefile)
