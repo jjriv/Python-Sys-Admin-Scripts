@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3.4
 
 import lxc
 import os
@@ -9,21 +9,21 @@ import smtplib
 
 #create the container object
 c = lxc.Container("postgresql", "/home/lxc")
-backupdir = "/nas/servers/db.pelagodesign.com"
+backupdir = "/nas/servers/r3sb.pelagodesign.com"
 mediadir = "/media/postgresql-backup"
 mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
 statusfile = "postgresql-status"
 datefile = "postgresql-date"
 consistentcheck = "consistent recovery state reached"
 readycheck = "database system is ready to accept connections"
-today = datetime.date.today()
-yesterday = datetime.date.today() - datetime.timedelta(1)
+today = datetime.datetime.today()
+yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
 
 #create the container, but only if it does not already exist
 if not c.defined and not c.running:
     if not c.create(
-        "download",
-        lxc.LXC_CREATE_QUIET,
+        "download", 
+        lxc.LXC_CREATE_QUIET, 
         {"dist": "centos", "release": "7", "arch": "amd64"}):
             print("Failed to create the container rootfs", file=sys.stderr)
             sys.exit(1)
@@ -90,6 +90,12 @@ c.attach_wait(lxc.attach_run_command,
 c.attach_wait(lxc.attach_run_command,
     ["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> /var/lib/pgsql/10/data/postgresql.conf"])
     
+#modify recovery.conf
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/standby_mode/#standby_mode/g", "/var/lib/pgsql/10/data/recovery.conf"])
+c.attach_wait(lxc.attach_run_command,
+    ["sed", "-i", "s/primary_conninfo/#primary_conninfo/g", "/var/lib/pgsql/10/data/recovery.conf"])
+
 #start postgresql
 c.attach_wait(lxc.attach_run_command,
     ["systemctl", "start", "postgresql-10"])
@@ -122,42 +128,46 @@ c.attach_wait(lxc.attach_run_command,
     ["chmod", "g+w", mediadir + "/" + datefile])
 
 #run a query against the database to make sure we have recent data, write to date file
+#use the mail_queue table because it's always current
 c.attach_wait(lxc.attach_run_command,
-    ["runuser", "-l", "postgres", "-c", "psql intervalsdev -t -c 'SELECT date FROM time ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
+    ["runuser", "-l", "postgres", "-c", "psql intervalsdev -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
 
-#read the date file
+#read the date file 
 with open(backupdir + "/" + datefile, 'r') as datefile:
     backupdate = datefile.read().strip()
+
+#convert date string to datetime object
+backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
 
 #read the status file
 with open(backupdir + "/" + statusfile, 'r') as statusfile:
     backupstatus = statusfile.read()
 
-#if yesterday's date is not present in the date file, alert the authorities!
-if backupdate != yesterday:
+#if yesterday's date is not present in the date file, alert the authorities! 
+if backupdate < yesterday:
     msg = "From: backup@pelagodesign.com\r\n"
     msg = msg + "To: jreeve@pelagodesign.com\r\n"
     msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
     msg = msg + "\r\n"
     msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
-    msg = msg + "\nDate found: "+backupdate+"\n"
+    msg = msg + "\nDate found: "+str(backupdate)+"\n"
     msg = msg + "Logs:\n"+backupstatus
     server = smtplib.SMTP('192.168.1.42')
     server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
     server.quit()
-
+    
 #stop and destroy container
-if not c.stop():
-    print("Failed to stop the container", file=sys.stderr)
-    sys.exit(1)
-if not c.destroy():
-    print("Failed to destroy the container", file=sys.stderr)
-    sys.exit(1)
+#if not c.stop():
+#    print("Failed to stop the container", file=sys.stderr)
+#    sys.exit(1)
+#if not c.destroy():
+#    print("Failed to destroy the container", file=sys.stderr)
+#    sys.exit(1)
 
 #delete unencrypted files
-os.remove(backupdir + "/base.tar.gz")
-os.remove(backupdir + "/pg_wal.tar.gz")
+#os.remove(backupdir + "/base.tar.gz")
+#os.remove(backupdir + "/pg_wal.tar.gz")
 
 #delete status and date text files
-os.remove(backupdir + "/" + statusfile)
-os.remove(backupdir + "/" + datefile)
+#os.remove(backupdir + "/" + statusfile)
+#os.remove(backupdir + "/" + datefile)
