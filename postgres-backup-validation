@@ -102,18 +102,22 @@ try:
         ["touch", mediadir + "/" + statusfile])
 
     #check that recovery has completed
-    while len(open(backupdir + "/" + statusfile).readlines()) == 0:
+    i = 0
+    while len(open(backupdir + "/" + statusfile).readlines()) == 0 and i < 30:
         c.attach_wait(lxc.attach_run_command,
             ["sh", "-c", "grep '" + consistentcheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log > " + mediadir + "/" + statusfile])
         print('Waiting for recovery to complete...')
         time.sleep(1)
+        i += 1
 
     #check that database is ready to accept connections
-    while len(open(backupdir + "/" + statusfile).readlines()) == 1:
+    i = 0
+    while len(open(backupdir + "/" + statusfile).readlines()) == 1 and i < 30:
         c.attach_wait(lxc.attach_run_command,
             ["sh", "-c", "grep '" + readycheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log >> " + mediadir + "/" + statusfile])
         print('Waiting for database to accept connections...')
         time.sleep(1)
+        i += 1
 
     #create date file in shared dir and set perms
     c.attach_wait(lxc.attach_run_command,
@@ -131,9 +135,6 @@ try:
     #read the date file 
     with open(backupdir + "/" + datefile, 'r') as datefileio:
         backupdate = datefileio.read().strip()
-
-    #convert date string to datetime object
-    backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
 
     #read the status file
     with open(backupdir + "/" + statusfile, 'r') as statusfileio:
@@ -156,6 +157,9 @@ except Exception as e:
 
 #we need to send an email regardless:
 finally:
+    #convert date string to datetime object
+    backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
+
     #if yesterday's date is not present in the date file, alert the authorities! 
     if backupdate < yesterday or errormessage:
         msg = "From: backup@pelagodesign.com\r\n"
