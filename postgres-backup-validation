@@ -10,6 +10,7 @@ import smtplib
 #create the container object
 c = lxc.Container("postgresql", "/home/lxc")
 backupdir = "/nas/servers/r3sb.pelagodesign.com"
+#backupdir = "/nas/servers/r3da01.pelagodesign.com"
 dbname = "intervalsdev" if backupdir.find("r3sb") > 0 else "intervals"
 mediadir = "/media/postgresql-backup"
 mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
@@ -21,7 +22,7 @@ today = datetime.date.today()
 yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
 
 try:
-    #create the container, but only if it does not already exist
+    #create the container
     c.create(
         "download", 
         lxc.LXC_CREATE_QUIET, 
@@ -45,13 +46,13 @@ try:
 
     #run some network commands to install postgres and update all the things
     c.attach_wait(lxc.attach_run_command,
-        ["yum", "install", "https://download.postgresql.org/pub/repos/yum/10/redhat/rhel-7-x86_64/pgdg-centos10-10-2.noarch.rpm", "-y"])
+        ["yum", "install", "https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm", "-y"])
     c.attach_wait(lxc.attach_run_command,
         ["yum", "install", "postgresql10-server", "-y"])
     c.attach_wait(lxc.attach_run_command,
         ["yum", "install", "postgresql10-contrib", "-y"])
-    c.attach_wait(lxc.attach_run_command,
-        ["yum", "update", "-y"])
+    #c.attach_wait(lxc.attach_run_command,
+    #    ["yum", "update", "-y"])
 
     #uncompress data files into postgres data directory
     c.attach_wait(lxc.attach_run_command,
@@ -91,6 +92,13 @@ try:
         ["sed", "-i", "s/standby_mode/#standby_mode/g", "/var/lib/pgsql/10/data/recovery.conf"])
     c.attach_wait(lxc.attach_run_command,
         ["sed", "-i", "s/primary_conninfo/#primary_conninfo/g", "/var/lib/pgsql/10/data/recovery.conf"])
+
+    #restart the container, because systemctl is buggy
+    c.stop()
+    time.sleep(10)
+    c.start()
+    time.sleep(10)
+
 
     #start postgresql
     c.attach_wait(lxc.attach_run_command,
@@ -152,28 +160,33 @@ try:
     os.remove(backupdir + "/" + statusfile)
     os.remove(backupdir + "/" + datefile)
 
-except Exception as e:
-    errormessage = e
-
-#we need to send an email regardless:
-finally:
     #convert date string to datetime object
     backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
 
     #if yesterday's date is not present in the date file, alert the authorities! 
-    if backupdate < yesterday or errormessage:
+    if backupdate < yesterday:
         msg = "From: backup@pelagodesign.com\r\n"
         msg = msg + "To: jreeve@pelagodesign.com\r\n"
         msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
         msg = msg + "\r\n"
-        if backupdate:
-            msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
-            msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
-            msg = msg + "Logs:\n"+backupstatus
-        elif errormessage:
-            msg = msg + "The backup cron had errors. Please investigate.\n"
-            msg = msg + "\Error: "+errormessage+"\n"
+        msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
+        msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
+        msg = msg + "Logs:\n"+backupstatus
+
         server = smtplib.SMTP('192.168.1.42')
         server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
         server.quit()
+
+except:
+    errormessage = str(sys.exc_info()[0]) + "\n" + str(sys.exc_info()[1]) + "\n" + str(sys.exc_info()[2])
+
+    msg = "From: backup@pelagodesign.com\r\n"
+    msg = msg + "To: jreeve@pelagodesign.com\r\n"
+    msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+    msg = msg + "\r\n"
+    msg = msg + "The backup cron had errors. Please investigate.\n"
+    msg = msg + "\Error: "+errormessage+"\n"
+    server = smtplib.SMTP('192.168.1.42')
+    server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+    server.quit()
     
