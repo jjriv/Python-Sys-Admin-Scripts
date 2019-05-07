@@ -2,15 +2,14 @@
 
 import lxc
 import os
+import subprocess
 import sys
 import time
 import datetime
 import smtplib
 
-#create the container object
-c = lxc.Container("postgresql", "/home/lxc")
-backupdir = "/nas/servers/r3sb.pelagodesign.com"
-#backupdir = "/nas/servers/r3da01.pelagodesign.com"
+#backupdir = "/nas/servers/r3sb.pelagodesign.com/"
+backupdir = "/nas/servers/r3da01.pelagodesign.com/"
 dbname = "intervalsdev" if backupdir.find("r3sb") > 0 else "intervals"
 mediadir = "/media/postgresql-backup"
 mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
@@ -21,7 +20,21 @@ readycheck = "database system is ready to accept connections"
 today = datetime.date.today()
 yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
 
+#db files
+dbfiles = [
+        backupdir + "base.tar.gz",
+        backupdir + "pg_wal.tar.gz",
+        ]
+
 try:
+    #decrypt db backup files
+    for dbfile in dbfiles:
+        cmd = "gpg --batch --passphrase-fd 0 --output " + dbfile + "  --decrypt " + dbfile + ".gpg < /root/.backup_passphrase"
+        subprocess.call(cmd, shell=True)
+
+    #create the container object
+    c = lxc.Container("postgresql", "/home/lxc")
+
     #create the container
     c.create(
         "download", 
@@ -99,7 +112,6 @@ try:
     c.start()
     time.sleep(10)
 
-
     #start postgresql
     c.attach_wait(lxc.attach_run_command,
         ["systemctl", "start", "postgresql-10"])
@@ -111,7 +123,7 @@ try:
 
     #check that recovery has completed
     i = 0
-    while len(open(backupdir + "/" + statusfile).readlines()) == 0 and i < 30:
+    while len(open(backupdir + statusfile).readlines()) == 0 and i < 30:
         c.attach_wait(lxc.attach_run_command,
             ["sh", "-c", "grep '" + consistentcheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log > " + mediadir + "/" + statusfile])
         print('Waiting for recovery to complete...')
@@ -120,7 +132,7 @@ try:
 
     #check that database is ready to accept connections
     i = 0
-    while len(open(backupdir + "/" + statusfile).readlines()) == 1 and i < 30:
+    while len(open(backupdir + statusfile).readlines()) == 1 and i < 30:
         c.attach_wait(lxc.attach_run_command,
             ["sh", "-c", "grep '" + readycheck + "' /var/lib/pgsql/10/data/pg_log/postgresql-" + str(today) + ".log >> " + mediadir + "/" + statusfile])
         print('Waiting for database to accept connections...')
@@ -141,11 +153,11 @@ try:
         ["runuser", "-l", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
 
     #read the date file 
-    with open(backupdir + "/" + datefile, 'r') as datefileio:
+    with open(backupdir + datefile, 'r') as datefileio:
         backupdate = datefileio.read().strip()
 
     #read the status file
-    with open(backupdir + "/" + statusfile, 'r') as statusfileio:
+    with open(backupdir + statusfile, 'r') as statusfileio:
         backupstatus = statusfileio.read()
 
     #stop and destroy container
@@ -153,12 +165,12 @@ try:
     c.destroy()
 
     #delete unencrypted files
-    os.remove(backupdir + "/base.tar.gz")
-    os.remove(backupdir + "/pg_wal.tar.gz")
+    for dbfile in dbfiles:
+        os.remove(dbfile)
 
     #delete status and date text files
-    os.remove(backupdir + "/" + statusfile)
-    os.remove(backupdir + "/" + datefile)
+    os.remove(backupdir + statusfile)
+    os.remove(backupdir + datefile)
 
     #convert date string to datetime object
     backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
