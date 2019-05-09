@@ -178,7 +178,7 @@ try:
     #if yesterday's date is not present in the date file, alert the authorities! 
     if backupdate < yesterday:
         msg = "From: backup@pelagodesign.com\r\n"
-        msg = msg + "To: jreeve@pelagodesign.com\r\n"
+        msg = msg + "To: backup@pelagodesign.com\r\n"
         msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
         msg = msg + "\r\n"
         msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
@@ -193,7 +193,7 @@ except:
     errormessage = str(sys.exc_info()[0]) + "\n" + str(sys.exc_info()[1]) + "\n" + str(sys.exc_info()[2])
 
     msg = "From: backup@pelagodesign.com\r\n"
-    msg = msg + "To: jreeve@pelagodesign.com\r\n"
+    msg = msg + "To: backup@pelagodesign.com\r\n"
     msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
     msg = msg + "\r\n"
     msg = msg + "The backup cron had errors. Please investigate.\n"
