@@ -45,7 +45,7 @@ try:
     if not mountentry in c.get_config_item("lxc.mount.entry"):
         c.append_config_item("lxc.mount.entry", mountentry)
 
-    #start the container if it is not already running
+    #start the container
     c.start()
 
     #wait for connectivity
@@ -149,8 +149,13 @@ try:
 
     #run a query against the database to make sure we have recent data, write to date file
     #use the mail_queue table because it's always current
+    #c.attach_wait(lxc.attach_run_command,
+    #    ["runuser", "-l", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
+
+    #runuser doesn't work when this script runs as a cron
+    #use 'su' instead.
     c.attach_wait(lxc.attach_run_command,
-        ["runuser", "-l", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
+        ["su", "-", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1' > " + mediadir + "/" + datefile])
 
     #read the date file 
     with open(backupdir + datefile, 'r') as datefileio:
