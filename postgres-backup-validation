@@ -8,8 +8,7 @@ import time
 import datetime
 import smtplib
 
-#backupdir = "/nas/servers/r3sb.pelagodesign.com/"
-backupdir = "/nas/servers/r3da01.pelagodesign.com/"
+backupdir = "/nas/servers/databaseserver/"
 dbname = "intervalsdev" if backupdir.find("r3sb") > 0 else "intervals"
 mediadir = "/media/postgresql-backup"
 mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
