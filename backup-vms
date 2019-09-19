@@ -32,9 +32,9 @@ for i, uuid in enumerate(uuids):
     #create template
     proctemplate = subprocess.Popen(['xe', 'template-param-set', 'is-a-template=false', 'ha-always-run=false', 'uuid='+suuid])
     #remove previous xva file
-    removexva = subprocess.Popen(['rm','-rf','/media/backup/'+week+'/'+labels[i]+'.xva'])
+    removexva = subprocess.Popen(['rm','-rf','/media/backupdrive/'+week+'/'+labels[i]+'.xva'])
     #export template
-    procexporttemplate = subprocess.Popen(['xe', 'vm-export', 'vm='+suuid, 'filename=/media/backup/'+week+'/'+labels[i]+'.xva'],stdout=subprocess.PIPE)
+    procexporttemplate = subprocess.Popen(['xe', 'vm-export', 'vm='+suuid, 'filename=/media/backupdrive/'+week+'/'+labels[i]+'.xva'],stdout=subprocess.PIPE)
     result = procexporttemplate.stdout.readline().strip()
     #make sure it says 'Export succeeded'
     if not 'Export succeeded' in result:
