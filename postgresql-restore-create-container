@@ -1,0 +1,62 @@
+#!/usr/bin/python3
+
+##container commands to create:
+# lxc-create -t download -n postgresql -P /home/lxc
+#  - centos 7 amd64
+# lxc-start -n postgresql -P /home/lxc -d
+# lxc-attach -n postgresql -P /home/lxc
+##yum update and install postgresql inside the container
+# yum install https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+# yum install postgresql11-server
+# yum install postgresql11-contrib
+##restart the container because systemctl is buggy
+# lxc-stop -n postgresql -P /home/lxc
+# lxc-start -n postgresql -P /home/lxc -d
+
+import lxc
+import sys
+import time
+
+#db files
+try:
+    #load the container object
+    c = lxc.Container("postgresql", "/home/lxc")
+
+    #create the container
+    c.create(
+        "download",
+        lxc.LXC_CREATE_QUIET,
+        {"dist": "centos", "release": "7", "arch": "amd64"})
+
+    #start the container
+    c.start()
+
+    #wait for connectivity
+    #this is not enough time, need to loop through it a few times until container network is ready
+    while not c.get_ips(timeout=1):
+        print('Waiting for network...')
+
+    # #sleep for a little longer just to be sure
+    print('Network found, pausing a moment to let it finish starting...')
+    time.sleep(5)
+
+    #run some network commands to install postgres and update all the things
+    c.attach_wait(lxc.attach_run_command,
+        ["yum", "install", "https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.
+rpm", "-y"])
+    c.attach_wait(lxc.attach_run_command,
+        ["yum", "install", "postgresql11-server", "-y"])
+    c.attach_wait(lxc.attach_run_command,
+        ["yum", "install", "postgresql11-contrib", "-y"])
+    c.attach_wait(lxc.attach_run_command,
+        ["yum", "update", "-y"])
+
+    #stop the container
+    c.stop()
+
+    print("PostgreSQL container created.")
+
+except:
+    errormessage = str(sys.exc_info()[0]) + "\n" + str(sys.exc_info()[1]) + "\n" + str(sys.exc_info()[2])
+    print("Creating PostgreSQL container failed")
+    print(errormessage)
