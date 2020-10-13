@@ -1,0 +1,200 @@
+[root@files cron]# more postgresql-restore-backup-test
+#!/usr/bin/python3
+
+import lxc
+import os
+import subprocess
+import sys
+import time
+import datetime
+import smtplib
+
+#backupdir = "/nas/servers/db/"
+backupdir = "/nas/servers/db/"
+dbname = "dbmain" if backupdir.find("db3") > 0 else "dbmainmain"
+mediadir = "/media/postgresql-backup"
+mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
+statusfile = "postgresql-status"
+datefile = "postgresql-date"
+consistentcheck = "consistent recovery state reached"
+readycheck = "database system is ready to accept connections"
+today = datetime.date.today()
+yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
+
+#db files
+dbfiles = [
+        backupdir + "base.tar.gz",
+        backupdir + "pg_wal.tar.gz",
+        ]
+
+try:
+    #decrypt db backup files
+    for dbfile in dbfiles:
+        cmd = "gpg --batch --passphrase-fd 0 --output " + dbfile + "  --decrypt " + dbfile + ".gpg < /root/.backup_passphrase"
+        subprocess.call(cmd, shell=True)
+
+    #load the container object
+    #container object should already have been created by another script
+    c = lxc.Container("postgresql", "/home/lxc")
+
+    #append the mount point
+    if not mountentry in c.get_config_item("lxc.mount.entry"):
+        c.append_config_item("lxc.mount.entry", mountentry)
+
+    #start the container
+    c.start()
+
+    #uncompress data files into postgres data directory
+    c.attach_wait(lxc.attach_run_command,
+        ["mkdir", "/var/lib/pgsql/11/wal_archive"])
+    c.attach_wait(lxc.attach_run_command,
+        ["chmod", "0700", "/var/lib/pgsql/11/wal_archive"])
+    c.attach_wait(lxc.attach_run_command,
+        ["tar", "-xzvf", mediadir + "/base.tar.gz", "-C", "/var/lib/pgsql/11/data"])
+    c.attach_wait(lxc.attach_run_command,
+        ["tar", "-xzvf", mediadir + "/pg_wal.tar.gz", "-C", "/var/lib/pgsql/11/wal_archive"])
+    c.attach_wait(lxc.attach_run_command,
+        ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/11/wal_archive"])
+    c.attach_wait(lxc.attach_run_command,
+        ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/11/data"])
+
+    #modify postgresql.conf
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/shared_buffers/#shared_buffers/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/effective_cache_size/#effective_cache_size/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/archive_mode/#archive_mode/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/maintenance_work_mem/#maintenance_work_mem/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/hot_standby/#hot_standby/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    #second, add numbers better for this server
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "echo 'shared_buffers = 2GB' >> /var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "echo 'effective_cache_size = 4GB' >> /var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "echo 'archive_mode = off' >> /var/lib/pgsql/11/data/postgresql.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> /var/lib/pgsql/11/data/postgresql.conf"])
+
+    #modify recovery.conf
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/standby_mode/#standby_mode/g", "/var/lib/pgsql/11/data/recovery.conf"])
+    c.attach_wait(lxc.attach_run_command,
+        ["sed", "-i", "s/primary_conninfo/#primary_conninfo/g", "/var/lib/pgsql/11/data/recovery.conf"])
+
+    #start postgresql
+    c.attach_wait(lxc.attach_run_command,
+        ["systemctl", "start", "postgresql-11"])
+
+    #wait for archives to catch up
+    #create status file in shared dir
+    c.attach_wait(lxc.attach_run_command,
+        ["touch", mediadir + "/" + statusfile])
+
+    #check that recovery has completed
+    i = 0
+    while len(open(backupdir + statusfile).readlines()) == 0 and i < 30:
+        c.attach_wait(lxc.attach_run_command,
+            ["sh", "-c", "grep '" + consistentcheck + "' /var/lib/pgsql/11/data/pg_log/postgresql-" + str(today) + ".log > " +
+ mediadir + "/" + statusfile])
+        print('Waiting for recovery to complete...')
+        time.sleep(1)
+        i += 1
+
+    #check that database is ready to accept connections
+    i = 0
+    while len(open(backupdir + statusfile).readlines()) == 1 and i < 30:
+        c.attach_wait(lxc.attach_run_command,
+            ["sh", "-c", "grep '" + readycheck + "' /var/lib/pgsql/11/data/pg_log/postgresql-" + str(today) + ".log >> " + med
+iadir + "/" + statusfile])
+        print('Waiting for database to accept connections...')
+        time.sleep(1)
+        i += 1
+
+    #create date file in shared dir and set perms
+    c.attach_wait(lxc.attach_run_command,
+        ["touch", mediadir + "/" + datefile])
+    c.attach_wait(lxc.attach_run_command,
+        ["chgrp", "postgres", mediadir + "/" + datefile])
+    c.attach_wait(lxc.attach_run_command,
+        ["chmod", "g+w", mediadir + "/" + datefile])
+
+    #run a query against the database to make sure we have recent data, write to date file
+    c.attach_wait(lxc.attach_run_command,
+        ["su", "-", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1'
+ > " + mediadir + "/" + datefile])
+
+    #read the date file
+    with open(backupdir + datefile, 'r') as datefileio:
+        backupdate = datefileio.read().strip()
+
+    #read the status file
+    with open(backupdir + statusfile, 'r') as statusfileio:
+        backupstatus = statusfileio.read()
+
+    #stop the database, destroy the files we created, and stop the container so we have a clean slate next time
+    c.attach_wait(lxc.attach_run_command,
+        ["systemctl", "stop", "postgresql-11"])
+    c.attach_wait(lxc.attach_run_command,
+        ["rm", "-rf", "/var/lib/pgsql/11/wal_archive"])
+    c.attach_wait(lxc.attach_run_command,
+        ["rm", "-rf", "/var/lib/pgsql/11/data/base/"])
+    c.attach_wait(lxc.attach_run_command,
+        ["rm", "-rf", "/var/lib/pgsql/11/data/pg_wal/"])
+    c.attach_wait(lxc.attach_run_command,
+        ["rm", "-rf", "/var/lib/pgsql/11/data/global/"])
+    c.attach_wait(lxc.attach_run_command,
+        ["rm", "-rf", "/var/lib/pgsql/11/data/pg_log/"])
+    c.stop()
+
+    #delete unencrypted files
+    for dbfile in dbfiles:
+        os.remove(dbfile)
+
+    #delete status and date text files
+    os.remove(backupdir + statusfile)
+    os.remove(backupdir + datefile)
+
+    #convert date string to datetime object
+    backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
+
+    #if yesterday's date is not present in the date file, alert the authorities!
+    if backupdate < yesterday:
+        msg = "From: backup@pelagodesign.com\r\n"
+        msg = msg + "To: backup@pelagodesign.com\r\n"
+        msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+        msg = msg + "\r\n"
+        msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
+        msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
+        msg = msg + "Logs:\n"+backupstatus
+
+        server = smtplib.SMTP('192.168.1.42')
+        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+        server.quit()
+    else:
+        msg = "From: backup@pelagodesign.com\r\n"
+        msg = msg + "To: backup@pelagodesign.com\r\n"
+        msg = msg + "Subject: PostgreSQL Backup Test Success!\r\n"
+        msg = msg + "\r\n"
+        msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
+        msg = msg + "Logs:\n"+backupstatus
+
+        server = smtplib.SMTP('192.168.1.42')
+        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+        server.quit()
+
+except:
+    errormessage = str(sys.exc_info()[0]) + "\n" + str(sys.exc_info()[1]) + "\n" + str(sys.exc_info()[2])
+
+    msg = "From: backup@pelagodesign.com\r\n"
+    msg = msg + "To: backup@pelagodesign.com\r\n"
+    msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+    msg = msg + "\r\n"
+    msg = msg + "The backup cron had errors. Please investigate.\n"
+    msg = msg + "\Error: "+errormessage+"\n"
+    server = smtplib.SMTP('192.168.1.42')
+    server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+    server.quit()
