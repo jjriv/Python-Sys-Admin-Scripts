@@ -12,4 +12,5 @@ files = sorted(os.listdir(path))
 for file in files:
     ctimedt = datetime.datetime.fromtimestamp(os.stat(path + '/' + file).st_ctime)
     if ctimedt < timebackdt:
+        print str(datetime.datetime.now()) + ' | ' + str(timebackdt) + ' | ' + str(ctimedt) + ' | ' + file
         os.remove(path + '/' + file)
