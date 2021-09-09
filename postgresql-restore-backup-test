@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import socket
 import os
 import subprocess
 import sys
@@ -7,10 +8,11 @@ import time
 import datetime
 import smtplib
 
-backupfilesdir = "/root/backup/"
-dbname = "intervalsdev" if backupdir.find("r1fr") > 0 else "intervals"
-backupdatadir = "/var/lib/pgsql/11/backupdata"
-backupwalarchivedir = "/var/lib/pgsql/11/backupwalarchive"
+backupfilesdir = "/backup"
+dbname = "intervals" if socket.gethostname().find("b1fr") < 0 else "intervalsdev"
+postgresdir = "/var/lib/pgsql/11"
+backupdatadir = postgresdir + "/backupdata"
+backupwalarchivedir = postgresdir + "/backupwalarchive"
 consistentcheck = "consistent recovery state reached"
 readycheck = "database system is ready to accept connections"
 today = datetime.date.today()
@@ -18,37 +20,30 @@ yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
 
 #db files
 dbfiles = [
-        backupfilesdir + "base.tar.gz",
-        backupfilesdir + "pg_wal.tar.gz",
+        "base.tar.gz",
+        "pg_wal.tar.gz",
         ]
 
 try:
     #decrypt db backup files
     for dbfile in dbfiles:
-        cmd = "gpg --batch --passphrase-fd 0 --output " + dbfile + "  --decrypt " + dbfile + ".gpg < /root/.backup_passphrase"
-        subprocess.call(cmd, shell=True)
+        cmd = "gpg --batch --passphrase-fd 0 --output " + postgresdir + "/" + dbfile + "  --decrypt " + backupfilesdir + "/" + dbfile + ".gpg < " + postgresdir + "/.backup_passphrase"
+        subprocess.run(cmd, shell=True)
 
     #uncompress data files into postgres backup data directory (do not use default data dir!)
     subprocess.run(["mkdir", backupdatadir])
     subprocess.run(["chmod", "0700", backupdatadir])
     subprocess.run(["mkdir", backupwalarchivedir])
     subprocess.run(["chmod", "0700", backupwalarchivedir])
-    subprocess.run(["tar", "-xzvf", backupfilesdir + "/base.tar.gz", "-C", backupdatadir])
-    subprocess.run(["tar", "-xzvf", backupfilesdir + "/pg_wal.tar.gz", "-C", backupwalarchivedir])
-    subprocess.run(["chown", "-R", "postgres:postgres", backupdatadir])
-    subprocess.run(["chown", "-R", "postgres:postgres", datawalarchivedir])
+    subprocess.run(["tar", "-xzvf", postgresdir + "/base.tar.gz", "-C", backupdatadir])
+    subprocess.run(["tar", "-xzvf", postgresdir + "/pg_wal.tar.gz", "-C", backupwalarchivedir])
 
     #modify postgresql.conf
     subprocess.run(["sed", "-i", "s/shared_buffers/#shared_buffers/g", backupdatadir + "/postgresql.conf"])
     subprocess.run(["sed", "-i", "s/effective_cache_size/#effective_cache_size/g", backupdatadir + "/postgresql.conf"])
     subprocess.run(["sed", "-i", "s/archive_mode/#archive_mode/g", backupdatadir + "/postgresql.conf"])
     subprocess.run(["sed", "-i", "s/maintenance_work_mem/#maintenance_work_mem/g", backupdatadir + "/postgresql.conf"])
-    subprocess.run(["sed", "-i", "s/hot_standby/#hot_standby/g", backupdatadir + "/postgresql.conf"])
-    #second, add numbers better for this server
-    #subprocess.run(["sh", "-c", "echo 'shared_buffers = 2GB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
-    #subprocess.run(["sh", "-c", "echo 'effective_cache_size = 4GB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
-    subprocess.run(["sh", "-c", "echo 'archive_mode = off' >> " + backupdatadir + "/postgresql.conf"],shell=True)
-    #subprocess.run(["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
+    subprocess.run(["sed", "-i", "s/hot_standby =/#hot_standby =/g", backupdatadir + "/postgresql.conf"])
 
     #modify recovery.conf to take it out of standby mode
     subprocess.run(["sed", "-i", "s/standby_mode/#standby_mode/g", backupdatadir + "/recovery.conf"])
@@ -56,18 +51,19 @@ try:
     #change where recovery reads its wal files from
     subprocess.run(["sed", "-i", "s/restore_command/#restore_command/g", backupdatadir + "/recovery.conf"])
     subprocess.run(["sed", "-i", "s/archive_cleanup_command/#archive_cleanup_command/g", backupdatadir + "/recovery.conf"])
-    subprocess.run(["sh", "-c", "echo 'restore_command = \'cp -i " + backupwalarchivedir + "/%f %p\'' >> " + backupdatadir + "/recovery.conf"],shell=True)
-    subprocess.run(["sh", "-c", "echo 'archive_cleanup_command = \'/usr/pgsql-11/bin/pg_archivecleanup " + backupwalarchivedir + " %r\'' >> " + backupdatadir + "/recovery.conf"],shell=True)
+    with open(backupdatadir + "/recovery.conf", "w+") as recoveryfile:
+        recoveryfile.write("restore_command = 'cp -i " + backupwalarchivedir + "/%f %p'\n")
+        recoveryfile.write("archive_cleanup_command = '/usr/pgsql-11/bin/pg_archivecleanup " + backupwalarchivedir + " %r'\n")
 
     #start postgresql
-    subprocess.run(["systemctl", "start", "postgresql-11"])
+    subprocess.run(["/usr/pgsql-11/bin/pg_ctl", "start", "-D", backupdatadir])
 
     #check that recovery has completed
     i = 0
     while i < 30:
-        subprocess.call(["sh", "-c", "grep '" + consistentcheck + "' " + backupdatadir + "/log/postgresql-" + str(today) + ".log"],shell=True,stdout=rout)
+        rout = subprocess.run(["grep", "'" + consistentcheck + "'", backupdatadir + "/log/postgresql-" + str(today) + ".log"],stdout=subprocess.PIPE)
         print('Waiting for recovery to complete...')
-        if len(rout.readLines()) > 0:
+        if rout.stdout.decode('utf-8').find(consistentcheck):
             print(consistentcheck)
             break
         time.sleep(1)
@@ -76,32 +72,35 @@ try:
     #check that database is ready to accept connections
     i = 0
     while i < 30:
-        subprocess.run("sh", "-c", "grep '" + readycheck + "' " + backupdatadir + "/log/postgresql-" + str(today) + ".log",shell=True,stdout=rout])
+        rout = subprocess.run(["grep", "'" + readycheck + "'", backupdatadir + "/log/postgresql-" + str(today) + ".log"],stdout=subprocess.PIPE)
         print('Waiting for database to accept connections...')
-        if len(rout.readLines()) > 0:
+        if rout.stdout.decode('utf-8').find(readycheck):
             print(readycheck)
             break
         time.sleep(1)
         i += 1
 
+    #uncomment the line below to exit this script and leave the db up and running
+    #sys.exit(2)
+
     #run a query against the database to make sure we have recent data
-    subprocess.run(["su", "-", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1'"],shell=True,stdout=rout)
+    rout =subprocess.run(["psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1'"],shell=True,stdout=subprocess.PIPE)
 
     #read the date from query
-    backupdate = rout.read().strip()
+    backupdate = rout.stdout.decode('utf-8').strip()
 
     #read the status file
-    with open("/var/lib/pgsql/11/data/log/postgresql-" + str(today) + ".log", 'r') as statusfileio:
+    with open(backupdatadir + "/log/postgresql-" + str(today) + ".log", 'r') as statusfileio:
         backupstatus = statusfileio.read()
 
     #stop the database, destroy the files we created, and stop the container so we have a clean slate next time
-    subprocess.run("systemctl", "stop", "postgresql-11"])
+    subprocess.run(["/usr/pgsql-11/bin/pg_ctl", "stop", "-D", backupdatadir])
     subprocess.run(["rm", "-rf", backupdatadir])
     subprocess.run(["rm", "-rf", backupwalarchivedir])
 
     #delete unencrypted files
     for dbfile in dbfiles:
-        os.remove(dbfile)
+        os.remove(postgresdir + "/" + dbfile)
 
     #convert date string to datetime object
     backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
@@ -115,10 +114,11 @@ try:
         msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
         msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
         msg = msg + "Logs:\n"+backupstatus
+        print(msg)
 
-        server = smtplib.SMTP('192.168.1.42')
-        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-        server.quit()
+        #server = smtplib.SMTP('192.168.1.42')
+        #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+        #server.quit()
     else:
         msg = "From: backup@pelagodesign.com\r\n"
         msg = msg + "To: backup@pelagodesign.com\r\n"
@@ -126,10 +126,14 @@ try:
         msg = msg + "\r\n"
         msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
         msg = msg + "Logs:\n"+backupstatus
+        print(msg)
 
-        server = smtplib.SMTP('192.168.1.42')
-        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-        server.quit()
+        #server = smtplib.SMTP('192.168.1.42')
+        #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+        #server.quit()
+
+except SystemExit:
+    sys.exit(2)
 
 except:
     errormessage = str(sys.exc_info()[0]) + "\n" + str(sys.exc_info()[1]) + "\n" + str(sys.exc_info()[2])
@@ -140,7 +144,7 @@ except:
     msg = msg + "\r\n"
     msg = msg + "The backup cron had errors. Please investigate.\n"
     msg = msg + "\Error: "+errormessage+"\n"
-    server = smtplib.SMTP('192.168.1.42')
-    server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-    server.quit()
-    
+    print(msg)
+    #server = smtplib.SMTP('192.168.1.42')
+    #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
+    #server.quit()
