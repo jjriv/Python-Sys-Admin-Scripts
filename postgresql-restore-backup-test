@@ -1,7 +1,5 @@
-[root@files cron]# more postgresql-restore-backup-test
 #!/usr/bin/python3
 
-import lxc
 import os
 import subprocess
 import sys
@@ -9,13 +7,10 @@ import time
 import datetime
 import smtplib
 
-#backupdir = "/nas/servers/db/"
-backupdir = "/nas/servers/db/"
-dbname = "dbmain" if backupdir.find("db3") > 0 else "dbmainmain"
-mediadir = "/media/postgresql-backup"
-mountentry = backupdir + " media/postgresql-backup none bind,create=dir 0 0"
-statusfile = "postgresql-status"
-datefile = "postgresql-date"
+backupfilesdir = "/root/backup/"
+dbname = "intervalsdev" if backupdir.find("r1fr") > 0 else "intervals"
+backupdatadir = "/var/lib/pgsql/11/backupdata"
+backupwalarchivedir = "/var/lib/pgsql/11/backupwalarchive"
 consistentcheck = "consistent recovery state reached"
 readycheck = "database system is ready to accept connections"
 today = datetime.date.today()
@@ -23,8 +18,8 @@ yesterday = datetime.datetime.utcnow() - datetime.timedelta(1)
 
 #db files
 dbfiles = [
-        backupdir + "base.tar.gz",
-        backupdir + "pg_wal.tar.gz",
+        backupfilesdir + "base.tar.gz",
+        backupfilesdir + "pg_wal.tar.gz",
         ]
 
 try:
@@ -33,130 +28,80 @@ try:
         cmd = "gpg --batch --passphrase-fd 0 --output " + dbfile + "  --decrypt " + dbfile + ".gpg < /root/.backup_passphrase"
         subprocess.call(cmd, shell=True)
 
-    #load the container object
-    #container object should already have been created by another script
-    c = lxc.Container("postgresql", "/home/lxc")
-
-    #append the mount point
-    if not mountentry in c.get_config_item("lxc.mount.entry"):
-        c.append_config_item("lxc.mount.entry", mountentry)
-
-    #start the container
-    c.start()
-
-    #uncompress data files into postgres data directory
-    c.attach_wait(lxc.attach_run_command,
-        ["mkdir", "/var/lib/pgsql/11/wal_archive"])
-    c.attach_wait(lxc.attach_run_command,
-        ["chmod", "0700", "/var/lib/pgsql/11/wal_archive"])
-    c.attach_wait(lxc.attach_run_command,
-        ["tar", "-xzvf", mediadir + "/base.tar.gz", "-C", "/var/lib/pgsql/11/data"])
-    c.attach_wait(lxc.attach_run_command,
-        ["tar", "-xzvf", mediadir + "/pg_wal.tar.gz", "-C", "/var/lib/pgsql/11/wal_archive"])
-    c.attach_wait(lxc.attach_run_command,
-        ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/11/wal_archive"])
-    c.attach_wait(lxc.attach_run_command,
-        ["chown", "-R", "postgres:postgres", "/var/lib/pgsql/11/data"])
+    #uncompress data files into postgres backup data directory (do not use default data dir!)
+    subprocess.run(["mkdir", backupdatadir])
+    subprocess.run(["chmod", "0700", backupdatadir])
+    subprocess.run(["mkdir", backupwalarchivedir])
+    subprocess.run(["chmod", "0700", backupwalarchivedir])
+    subprocess.run(["tar", "-xzvf", backupfilesdir + "/base.tar.gz", "-C", backupdatadir])
+    subprocess.run(["tar", "-xzvf", backupfilesdir + "/pg_wal.tar.gz", "-C", backupwalarchivedir])
+    subprocess.run(["chown", "-R", "postgres:postgres", backupdatadir])
+    subprocess.run(["chown", "-R", "postgres:postgres", datawalarchivedir])
 
     #modify postgresql.conf
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/shared_buffers/#shared_buffers/g", "/var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/effective_cache_size/#effective_cache_size/g", "/var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/archive_mode/#archive_mode/g", "/var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/maintenance_work_mem/#maintenance_work_mem/g", "/var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/hot_standby/#hot_standby/g", "/var/lib/pgsql/11/data/postgresql.conf"])
+    subprocess.run(["sed", "-i", "s/shared_buffers/#shared_buffers/g", backupdatadir + "/postgresql.conf"])
+    subprocess.run(["sed", "-i", "s/effective_cache_size/#effective_cache_size/g", backupdatadir + "/postgresql.conf"])
+    subprocess.run(["sed", "-i", "s/archive_mode/#archive_mode/g", backupdatadir + "/postgresql.conf"])
+    subprocess.run(["sed", "-i", "s/maintenance_work_mem/#maintenance_work_mem/g", backupdatadir + "/postgresql.conf"])
+    subprocess.run(["sed", "-i", "s/hot_standby/#hot_standby/g", backupdatadir + "/postgresql.conf"])
     #second, add numbers better for this server
-    c.attach_wait(lxc.attach_run_command,
-        ["sh", "-c", "echo 'shared_buffers = 2GB' >> /var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sh", "-c", "echo 'effective_cache_size = 4GB' >> /var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sh", "-c", "echo 'archive_mode = off' >> /var/lib/pgsql/11/data/postgresql.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> /var/lib/pgsql/11/data/postgresql.conf"])
+    #subprocess.run(["sh", "-c", "echo 'shared_buffers = 2GB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
+    #subprocess.run(["sh", "-c", "echo 'effective_cache_size = 4GB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
+    subprocess.run(["sh", "-c", "echo 'archive_mode = off' >> " + backupdatadir + "/postgresql.conf"],shell=True)
+    #subprocess.run(["sh", "-c", "echo 'maintenance_work_mem = 250MB' >> " + backupdatadir + "/postgresql.conf"],shell=True)
 
-    #modify recovery.conf
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/standby_mode/#standby_mode/g", "/var/lib/pgsql/11/data/recovery.conf"])
-    c.attach_wait(lxc.attach_run_command,
-        ["sed", "-i", "s/primary_conninfo/#primary_conninfo/g", "/var/lib/pgsql/11/data/recovery.conf"])
+    #modify recovery.conf to take it out of standby mode
+    subprocess.run(["sed", "-i", "s/standby_mode/#standby_mode/g", backupdatadir + "/recovery.conf"])
+    subprocess.run(["sed", "-i", "s/primary_conninfo/#primary_conninfo/g", backupdatadir + "/recovery.conf"])
+    #change where recovery reads its wal files from
+    subprocess.run(["sed", "-i", "s/restore_command/#restore_command/g", backupdatadir + "/recovery.conf"])
+    subprocess.run(["sed", "-i", "s/archive_cleanup_command/#archive_cleanup_command/g", backupdatadir + "/recovery.conf"])
+    subprocess.run(["sh", "-c", "echo 'restore_command = \'cp -i " + backupwalarchivedir + "/%f %p\'' >> " + backupdatadir + "/recovery.conf"],shell=True)
+    subprocess.run(["sh", "-c", "echo 'archive_cleanup_command = \'/usr/pgsql-11/bin/pg_archivecleanup " + backupwalarchivedir + " %r\'' >> " + backupdatadir + "/recovery.conf"],shell=True)
 
     #start postgresql
-    c.attach_wait(lxc.attach_run_command,
-        ["systemctl", "start", "postgresql-11"])
-
-    #wait for archives to catch up
-    #create status file in shared dir
-    c.attach_wait(lxc.attach_run_command,
-        ["touch", mediadir + "/" + statusfile])
+    subprocess.run(["systemctl", "start", "postgresql-11"])
 
     #check that recovery has completed
     i = 0
-    while len(open(backupdir + statusfile).readlines()) == 0 and i < 30:
-        c.attach_wait(lxc.attach_run_command,
-            ["sh", "-c", "grep '" + consistentcheck + "' /var/lib/pgsql/11/data/pg_log/postgresql-" + str(today) + ".log > " +
- mediadir + "/" + statusfile])
+    while i < 30:
+        subprocess.call(["sh", "-c", "grep '" + consistentcheck + "' " + backupdatadir + "/log/postgresql-" + str(today) + ".log"],shell=True,stdout=rout)
         print('Waiting for recovery to complete...')
+        if len(rout.readLines()) > 0:
+            print(consistentcheck)
+            break
         time.sleep(1)
         i += 1
 
     #check that database is ready to accept connections
     i = 0
-    while len(open(backupdir + statusfile).readlines()) == 1 and i < 30:
-        c.attach_wait(lxc.attach_run_command,
-            ["sh", "-c", "grep '" + readycheck + "' /var/lib/pgsql/11/data/pg_log/postgresql-" + str(today) + ".log >> " + med
-iadir + "/" + statusfile])
+    while i < 30:
+        subprocess.run("sh", "-c", "grep '" + readycheck + "' " + backupdatadir + "/log/postgresql-" + str(today) + ".log",shell=True,stdout=rout])
         print('Waiting for database to accept connections...')
+        if len(rout.readLines()) > 0:
+            print(readycheck)
+            break
         time.sleep(1)
         i += 1
 
-    #create date file in shared dir and set perms
-    c.attach_wait(lxc.attach_run_command,
-        ["touch", mediadir + "/" + datefile])
-    c.attach_wait(lxc.attach_run_command,
-        ["chgrp", "postgres", mediadir + "/" + datefile])
-    c.attach_wait(lxc.attach_run_command,
-        ["chmod", "g+w", mediadir + "/" + datefile])
+    #run a query against the database to make sure we have recent data
+    subprocess.run(["su", "-", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1'"],shell=True,stdout=rout)
 
-    #run a query against the database to make sure we have recent data, write to date file
-    c.attach_wait(lxc.attach_run_command,
-        ["su", "-", "postgres", "-c", "psql " + dbname + " -t -c 'SELECT create_time FROM mail_queue ORDER BY id DESC LIMIT 1'
- > " + mediadir + "/" + datefile])
-
-    #read the date file
-    with open(backupdir + datefile, 'r') as datefileio:
-        backupdate = datefileio.read().strip()
+    #read the date from query
+    backupdate = rout.read().strip()
 
     #read the status file
-    with open(backupdir + statusfile, 'r') as statusfileio:
+    with open("/var/lib/pgsql/11/data/log/postgresql-" + str(today) + ".log", 'r') as statusfileio:
         backupstatus = statusfileio.read()
 
     #stop the database, destroy the files we created, and stop the container so we have a clean slate next time
-    c.attach_wait(lxc.attach_run_command,
-        ["systemctl", "stop", "postgresql-11"])
-    c.attach_wait(lxc.attach_run_command,
-        ["rm", "-rf", "/var/lib/pgsql/11/wal_archive"])
-    c.attach_wait(lxc.attach_run_command,
-        ["rm", "-rf", "/var/lib/pgsql/11/data/base/"])
-    c.attach_wait(lxc.attach_run_command,
-        ["rm", "-rf", "/var/lib/pgsql/11/data/pg_wal/"])
-    c.attach_wait(lxc.attach_run_command,
-        ["rm", "-rf", "/var/lib/pgsql/11/data/global/"])
-    c.attach_wait(lxc.attach_run_command,
-        ["rm", "-rf", "/var/lib/pgsql/11/data/pg_log/"])
-    c.stop()
+    subprocess.run("systemctl", "stop", "postgresql-11"])
+    subprocess.run(["rm", "-rf", backupdatadir])
+    subprocess.run(["rm", "-rf", backupwalarchivedir])
 
     #delete unencrypted files
     for dbfile in dbfiles:
         os.remove(dbfile)
-
-    #delete status and date text files
-    os.remove(backupdir + statusfile)
-    os.remove(backupdir + datefile)
 
     #convert date string to datetime object
     backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
@@ -198,3 +143,4 @@ except:
     server = smtplib.SMTP('192.168.1.42')
     server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
     server.quit()
+    
