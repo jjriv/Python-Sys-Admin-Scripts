@@ -12,9 +12,10 @@ import socket
 
 path = '/postgresql_wal_backup'
 hoursback = 48;
-hoursrecent = 1;
+hoursrecent = 12;
 timebackdt = datetime.datetime.now() - datetime.timedelta(hours=hoursback)
 timerecentdt = datetime.datetime.now() - datetime.timedelta(hours=hoursrecent)
+hostname = socket.gethostname().split('.')[0]
 
 files = sorted(os.listdir(path))
 oldfiles = []
@@ -28,9 +29,9 @@ for file in files:
         recentfiles.append(str(timerecentdt) + ' | ' + filestats)
 
 #mail headers
-msg =       "From: email@email.com\r\n"
-msg = msg + "To: email@email.com\r\n"
-msg = msg + "Subject: PostgreSQL WAL Backup Issue\r\n"
+msg =       "From: backup@pelagodesign.com\r\n"
+msg = msg + "To: backup@pelagodesign.com\r\n"
+msg = msg + "Subject: PostgreSQL WAL Backup Issue on " + hostname + "\r\n"
 msg = msg + "\r\n"
 
 #if we found any old files, email a message
@@ -44,10 +45,8 @@ elif len(recentfiles) == 0:
     sendmail = True
 
 if sendmail == True:
-    hostname = socket.gethostname().split('.')[0]
-    if hostname == 'd3sb':
-        mailserver = smtplib.SMTP('1.2.3.4')
+    if hostname == 'd1fr':
+        mailserver = smtplib.SMTP('192.168.132.78')
     else:
-        mailserver = smtplib.SMTP('5.6.7.8')
-    mailserver.sendmail("email@email.com", "email@email.com", msg)
-    mailserver.quit()
+        mailserver = smtplib.SMTP('10.186.33.143')
+    mailserver.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
