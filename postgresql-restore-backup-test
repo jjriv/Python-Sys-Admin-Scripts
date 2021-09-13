@@ -5,10 +5,13 @@ import os
 import subprocess
 import sys
 import time
-import datetime
 import smtplib
+import math
+import datetime
 
-backupfilesdir = "/backup"
+dirnum = str(int(math.floor(int(datetime.datetime.now().strftime("%s")) / 86400) % 3))
+
+backupfilesdir = "/backup/" + dirnum
 dbname = "intervals" if socket.gethostname().find("b1fr") < 0 else "intervalsdev"
 postgresdir = "/var/lib/pgsql/11"
 backupdatadir = postgresdir + "/backupdata"
@@ -56,26 +59,16 @@ try:
         recoveryfile.write("archive_cleanup_command = '/usr/pgsql-11/bin/pg_archivecleanup " + backupwalarchivedir + " %r'\n")
 
     #start postgresql
-    subprocess.run(["/usr/pgsql-11/bin/pg_ctl", "start", "-D", backupdatadir])
+    subprocess.run(["/usr/pgsql-11/bin/pg_ctl", "start", "-D", backupdatadir, "-t", "150"])
 
     #check that recovery has completed
-    i = 0
-    while i < 30:
-        rout = subprocess.run(["grep", "'" + consistentcheck + "'", backupdatadir + "/log/postgresql-" + str(today) + ".log"],stdout=subprocess.PIPE)
-        print('Waiting for recovery to complete...')
-        if rout.stdout.decode('utf-8').find(consistentcheck):
-            print(consistentcheck)
-            break
-        time.sleep(1)
-        i += 1
 
-    #check that database is ready to accept connections
     i = 0
-    while i < 30:
-        rout = subprocess.run(["grep", "'" + readycheck + "'", backupdatadir + "/log/postgresql-" + str(today) + ".log"],stdout=subprocess.PIPE)
-        print('Waiting for database to accept connections...')
-        if rout.stdout.decode('utf-8').find(readycheck):
-            print(readycheck)
+    while i < 300:
+        rout = subprocess.run(["grep", consistentcheck, backupdatadir + "/log/postgresql-" + str(today) + ".log"],stdout=subprocess.PIPE)
+        print('Waiting for recovery to complete...')
+        if rout.stdout.decode('utf-8').find(consistentcheck) > 0:
+            print(consistentcheck)
             break
         time.sleep(1)
         i += 1
@@ -88,6 +81,9 @@ try:
 
     #read the date from query
     backupdate = rout.stdout.decode('utf-8').strip()
+
+    #pause here for a little bit to let logging catch up
+    time.sleep(10)
 
     #read the status file
     with open(backupdatadir + "/log/postgresql-" + str(today) + ".log", 'r') as statusfileio:
@@ -104,33 +100,37 @@ try:
 
     #convert date string to datetime object
     backupdate = datetime.datetime.strptime(backupdate, '%Y-%m-%d %H:%M:%S')
-
+        
     #if yesterday's date is not present in the date file, alert the authorities!
     if backupdate < yesterday:
         msg = "From: backup@pelagodesign.com\r\n"
         msg = msg + "To: backup@pelagodesign.com\r\n"
-        msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+        #msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+        msg = msg + "Subject: Staging: PostgreSQL Results (fail)\r\n"
         msg = msg + "\r\n"
         msg = msg + "The backup did not contain data for yesterday. Please investigate.\n"
-        msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
+        msg = msg + "\nDate found: "+backupdate.strftime('%Y-%m-%d %H:%M:%S')+" UTC\n"
         msg = msg + "Logs:\n"+backupstatus
         print(msg)
 
-        #server = smtplib.SMTP('192.168.1.42')
-        #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-        #server.quit()
+        #server = smtplib.SMTP("192.168.132.78")
+        server = smtplib.SMTP("localhost")
+        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg.encode("utf-8"))
+        server.quit()
     else:
         msg = "From: backup@pelagodesign.com\r\n"
         msg = msg + "To: backup@pelagodesign.com\r\n"
-        msg = msg + "Subject: PostgreSQL Backup Test Success!\r\n"
+        #msg = msg + "Subject: PostgreSQL Backup Test Success!\r\n"
+        msg = msg + "Subject: Staging: PostgreSQL Results (success)\r\n"
         msg = msg + "\r\n"
-        msg = msg + "\nDate found: "+str(backupdate)+" UTC\n"
+        msg = msg + "\nDate found: "+backupdate.strftime('%Y-%m-%d %H:%M:%S')+" UTC\n"
         msg = msg + "Logs:\n"+backupstatus
         print(msg)
 
-        #server = smtplib.SMTP('192.168.1.42')
-        #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-        #server.quit()
+        #server = smtplib.SMTP("192.168.132.78")
+        server = smtplib.SMTP("localhost")
+        server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg.encode("utf-8"))
+        server.quit()
 
 except SystemExit:
     sys.exit(2)
@@ -140,11 +140,14 @@ except:
 
     msg = "From: backup@pelagodesign.com\r\n"
     msg = msg + "To: backup@pelagodesign.com\r\n"
-    msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+    #msg = msg + "Subject: PostgreSQL Backup Test Failed\r\n"
+    msg = msg + "Subject: Staging: PostgreSQL Results (error)\r\n"
     msg = msg + "\r\n"
     msg = msg + "The backup cron had errors. Please investigate.\n"
     msg = msg + "\Error: "+errormessage+"\n"
     print(msg)
-    #server = smtplib.SMTP('192.168.1.42')
-    #server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg)
-    #server.quit()
+
+    #server = smtplib.SMTP("192.168.132.78")
+    server = smtplib.SMTP("localhost")
+    server.sendmail("backup@pelagodesign.com", "backup@pelagodesign.com", msg.encode("utf-8"))
+    server.quit()
